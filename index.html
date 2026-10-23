@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>From Noise to Signal | CS180 Project 3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&display=swap">
+</head>
+<body>
+
+<nav class="topnav" aria-label="Sections">
+  <div class="wrap">
+    <a class="brand" href="#top">From Noise to Signal</a>
+    <div class="clusters">
+    <div class="cluster pa">
+      <span class="lbl">Part A: The Power of Flow Models</span>
+      <span class="links">
+      <a href="#a1">1 Training and Sampling</a>
+      <a href="#a2">2 Guidance</a>
+      <a href="#a3">3 Creative Applications</a>
+      </span>
+    </div>
+    <div class="cluster pb">
+      <span class="lbl">Part B: Flow Matching from Scratch</span>
+      <span class="links">
+      <a href="#b1">1 Single-step Denoiser</a>
+      <a href="#b2">2 Flow Matching</a>
+      </span>
+    </div>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <div class="kicker">t = 0.00 &nbsp;|&nbsp; pure noise</div>
+    <h1>From Noise<br>to Signal</h1>
+    <div class="sub">CS180 Project 3, Flow Matching</div>
+    <div class="meta">
+      <div><b>Author</b>Allena Oglivie</div>
+      <div><b>Course</b>CS180, Computer Vision</div>
+    </div>
+    <p class="intro">Flow models turn pure Gaussian noise into images by following a learned velocity field from t = 0 (noise) to t = 1 (a clean image). In Part A I use a pretrained text-conditioned flow model to denoise, sample, guide, and edit images. In Part B I build and train UNet flow models from scratch on MNIST, first as a one-step denoiser and then as time- and class-conditioned flow matching models. Like the results, this page starts in noise and resolves as you read.</p>
+  </div>
+</header>
+
+<section class="toc" aria-label="Table of contents">
+  <div class="wrap">
+    <h2>Contents</h2>
+    <div class="toc-grid">
+      <div class="toc-col pa">
+        <h3>Part A: The Power of Flow Models</h3>
+        <ol>
+          <li><span>A.1.1</span><a href="#a11">Constructing Noisy Training Inputs</a></li>
+          <li><span>A.1.2</span><a href="#a12">Classical Denoising</a></li>
+          <li><span>A.1.3</span><a href="#a13">One-Step Denoising</a></li>
+          <li><span>A.1.4</span><a href="#a14">Visualizing Velocity</a></li>
+          <li><span>A.1.5</span><a href="#a15">Iterative Denoising with Euler Sampling</a></li>
+          <li><span>A.1.6</span><a href="#a16">Generating Images from Noise</a></li>
+          <li><span>A.2.1</span><a href="#a21">Classifier-Free Guidance</a></li>
+          <li><span>A.3.1</span><a href="#a31">Image-to-Image Editing</a></li>
+          <li><span>A.3.2</span><a href="#a32">Text-Guided Image Editing</a></li>
+          <li><span>A.3.3</span><a href="#a33">Editing Hand-Drawn and Web Images</a></li>
+          <li><span>A.3.4</span><a href="#a34">Visual Anagrams</a></li>
+          <li><span>A.3.5</span><a href="#a35">Hybrid Images</a></li>
+        </ol>
+      </div>
+      <div class="toc-col pb">
+        <h3>Part B: Flow Matching from Scratch</h3>
+        <ol>
+          <li><span>B.1.1</span><a href="#b11">UNet</a></li>
+          <li><span>B.1.2</span><a href="#b12">Noising Process</a></li>
+          <li><span>B.1.2.1</span><a href="#b121">Training the Denoiser</a></li>
+          <li><span>B.1.2.2</span><a href="#b122">Out-of-Distribution Testing</a></li>
+          <li><span>B.1.2.3</span><a href="#b123">Denoising Pure Noise</a></li>
+          <li><span>B.2.3</span><a href="#b23">Time-Conditioned Flow Matching</a></li>
+          <li><span>B.2.6</span><a href="#b26">Class-Conditioned Flow Matching</a></li>
+          <li><span>t = 1.00</span><a href="#end">Conclusion</a></li>
+        </ol>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PART A ============ -->
+<section class="banner pa" id="partA">
+  <div class="wrap">
+    <div>
+      <h2>Part A</h2>
+      <p>The Power of Flow Models</p>
+    </div>
+    <div class="range">t = 0.10 to 0.90</div>
+  </div>
+</section>
+
+<main>
+<div id="a1"></div>
+<section class="sec pa-sec" id="a11" style="--g:.55">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">A.1.1</span><h3>Constructing Noisy Training Inputs</h3><span class="ttag">t = 0.10</span></div>
+    <div class="prose">
+      <p>My image is a Silent Princess flower screenshot from Breath of the Wild (1000x563, center-cropped to 512x512). It is mostly saturated green with a soft blurry background, and the flower has strong color and edge contrast. Noisy inputs interpolate between noise and the image:</p>
+      <code class="eq">x_t = (1 - t) * eps + t * x1      (t = 0 is noise, t = 1 is the clean image)</code>
+      <p>Endpoint checks with <code>torch.allclose</code> pass: t = 0 returns the noise and t = 1 returns the image.</p>
+    </div>
+    <figure>
+      <img src="parta_imgs/training_inputs.png" alt="Silent Princess original image followed by noisy versions at t = 0.25, 0.50 and 0.75">
+      <figcaption><b>Fig A.1.1</b> | Silent Princess | original, then x_t at t = 0.25, 0.50, 0.75</figcaption>
+    </figure>
+    <div class="prose">
+      <ul>
+        <li><b>t = 0.25:</b> almost all noise, only a faint outline of the stems.</li>
+        <li><b>t = 0.50:</b> flower, bud, and background shapes clearly visible but grainy.</li>
+        <li><b>t = 0.75:</b> mostly the image with a light noise layer.</li>
+      </ul>
+      <p>Structure is already recognizable by t = 0.5.</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<section class="sec pa-sec" id="a12" style="--g:.5">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">A.1.2</span><h3>Classical Denoising</h3><span class="ttag">t = 0.17</span></div>
+    <div class="prose">
+      <p>Dividing by t restores the image amplitude, and a Gaussian blur then averages out the remaining noise. I picked the best sigma by eye for each t.</p>
+      <code class="eq">x_t / t = x1 + ((1 - t) / t) * eps</code>
+    </div>
+    <figure>
+      <img src="parta_imgs/blur_0.25.png" alt="Noisy input at t = 0.25 next to its Gaussian blur with sigma 8">
+      <figcaption><b>Fig A.1.2a</b> | t = 0.25 | noisy input and Gaussian blur, sigma = 8.0</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/blur_0.5.png" alt="Noisy input at t = 0.50 next to its Gaussian blur with sigma 4">
+      <figcaption><b>Fig A.1.2b</b> | t = 0.50 | noisy input and Gaussian blur, sigma = 4.0</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/blur_0.75.png" alt="Noisy input at t = 0.75 next to its Gaussian blur with sigma 2">
+      <figcaption><b>Fig A.1.2c</b> | t = 0.75 | noisy input and Gaussian blur, sigma = 2.0</figcaption>
+    </figure>
+    <div class="prose">
+      <p>The noise factor after dividing is (1 - t) / t: 3 at t = 0.25 (noise three times stronger than the image), 1 at t = 0.5 (equal strength), and 1/3 at t = 0.75 (noise is weak). As predicted, the closer t is to 0, the larger sigma needs to be to average out the noise.</p>
+      <p>The tradeoff is that a larger sigma removes more noise but also smears edges and detail. Classical blur has no idea what a flower should look like, so it can only trade noise for blur.</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<section class="sec pa-sec" id="a13" style="--g:.45">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">A.1.3</span><h3>One-Step Denoising</h3><span class="ttag">t = 0.24</span></div>
+    <div class="prose">
+      <p>The pretrained model predicts a velocity with the prompt <span class="prompt">"a high quality photo"</span>, and one step jumps straight to t = 1. With the true velocity v = x1 - eps, this gives back x1 exactly. It uses exactly one model prediction per noisy input.</p>
+      <code class="eq">x1_hat = x_t + (1 - t) * v_theta(x_t, t, c)</code>
+    </div>
+    <figure>
+      <img src="parta_imgs/one_step_0.25.png" alt="Original, noisy at t = 0.25, and one-step estimate">
+      <figcaption><b>Fig A.1.3a</b> | t = 0.25 | original, noisy, one-step estimate</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/one_step_0.5.png" alt="Original, noisy at t = 0.50, and one-step estimate">
+      <figcaption><b>Fig A.1.3b</b> | t = 0.50 | original, noisy, one-step estimate</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/one_step_0.75.png" alt="Original, noisy at t = 0.75, and one-step estimate">
+      <figcaption><b>Fig A.1.3c</b> | t = 0.75 | original, noisy, one-step estimate</figcaption>
+    </figure>
+    <div class="prose">
+      <p>At t = 0.25 the overall layout (flower, bud, stem, leaves, mountains, sky) and colors (blue petal centers, green field) are kept. The teal stamen tips, most of the orange center, and the petal and bud texture are lost, and the background flowers became blue smudges. The result is smooth and slightly blurry, but far better than Gaussian blur at the same noise level.</p>
+      <p>With high noise the model gives an averaged result: it is an average of all clean images that could plausibly produce this noisy input. Shared features survive and differing details cancel out. With lower noise, finer detail remains.</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<section class="sec pa-sec" id="a14" style="--g:.4">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">A.1.4</span><h3>Visualizing Velocity</h3><span class="ttag">t = 0.32</span></div>
+    <div class="prose">
+      <p>I compare the predicted update (1 - t) * v_hat with the ground-truth update (1 - t) * v_gt, where v_gt = x1 - eps. The error map is the per-pixel RMS over RGB, shown with the same color limits in every row.</p>
+    </div>
+    <figure class="narrower">
+      <img src="parta_imgs/velocity_original.png" alt="Original Silent Princess image used for the velocity visualization">
+      <figcaption><b>Fig A.1.4a</b> | original image</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/velocity_0.25.png" alt="At t = 0.25: noisy input, predicted update, ground-truth update and error heatmap">
+      <figcaption><b>Fig A.1.4b</b> | t = 0.25 | noisy, predicted update, ground-truth update, error</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/velocity_0.50.png" alt="At t = 0.50: noisy input, predicted update, ground-truth update and error heatmap">
+      <figcaption><b>Fig A.1.4c</b> | t = 0.50 | noisy, predicted update, ground-truth update, error</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/velocity_0.75.png" alt="At t = 0.75: noisy input, predicted update, ground-truth update and error heatmap">
+      <figcaption><b>Fig A.1.4d</b> | t = 0.75 | noisy, predicted update, ground-truth update, error</figcaption>
+    </figure>
+    <div class="prose">
+      <p>At t = 0.25 the error is brightest on edges and fine detail (stamen tips, petal outlines, bud, leaf edges), and smooth areas like the sky and field are near zero. Both updates look grainy, but the error map has no grain: the predicted and ground-truth noise match so well that the grain cancels in the difference, leaving only differences in image detail.</p>
+      <code class="eq">(1 - t)(v_hat - v_gt) = (x1_hat - x_t) - (x1 - x_t) = x1_hat - x1</code>
+      <p>So the error heatmap is exactly the per-pixel error of the A.1.3 one-step estimate, which is why the bright spots match the details A.1.3 lost.</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<section class="sec pa-sec" id="a15" style="--g:.36">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">A.1.5</span><h3>Iterative Denoising with Euler Sampling</h3><span class="ttag">t = 0.39</span></div>
+    <div class="prose">
+      <p>I denoised the t = 0.50 input with step h = 0.02 (25 updates), recomputing the velocity each step. The final step is shortened to land exactly on t = 1 (h = min(step_size, 1 - t)), with a 1e-9 tolerance against floating point drift.</p>
+      <code class="eq">x_{t+h} = x_t + h * v(x_t, t)</code>
+    </div>
+    <figure>
+      <img src="parta_imgs/trajectory.png" alt="Euler trajectory from t = 0.50 to t = 1.00, showing the initial input, every fifth update and the final image">
+      <figcaption><b>Fig A.1.5a</b> | Euler trajectory | initial t = 0.50, every fifth update, final t = 1.00</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/comparison.png" alt="Comparison of original, Gaussian blur, one-step and Euler reconstructions">
+      <figcaption><b>Fig A.1.5b</b> | t = 0.50 input | original, blur, one step, Euler</figcaption>
+    </figure>
+    <table class="table">
+      <thead><tr><th>Method (t = 0.50 input)</th><th>Reconstruction MSE</th></tr></thead>
+      <tbody>
+        <tr><td>Gaussian blur</td><td>0.0122</td></tr>
+        <tr><td>One step</td><td>0.0040 (lowest)</td></tr>
+        <tr><td>Euler, 25 steps</td><td>0.0047</td></tr>
+      </tbody>
+    </table>
+    <div class="prose">
+      <p>Noise fades gradually with each step. At t = 1.00 the teal stamen tips, yellow-orange center, and crisp petal edges are back, all lost in the one-step result. The field has soft vertical streaking and the background flowers differ slightly: sharp and plausible, but not a pixel-perfect copy.</p>
+      <p><b>Lowest MSE is not the same as best looking.</b> Euler has sharper detail, but if a detail is slightly off from the original, MSE penalizes it. One step hedges by spreading uncertain details over all plausible positions, so it is never badly wrong anywhere. A sharp detail placed slightly wrong is penalized twice: where it was drawn but shouldn't be, and where it should be but is missing. Squared error rewards blurry averages over committing to a sharp guess.</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<section class="sec pa-sec" id="a16" style="--g:.32">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">A.1.6</span><h3>Generating Images from Noise</h3><span class="ttag">t = 0.46</span></div>
+    <div class="prose">
+      <p>Five independent Gaussian starts (seeds 180 to 184) integrated from t = 0 to 1 with 50 Euler updates and the prompt <span class="prompt">"a high quality photo"</span>.</p>
+    </div>
+    <figure>
+      <img src="parta_imgs/conditional_samples.png" alt="Five samples from pure noise without guidance, seeds 180 to 184, all portraits of people">
+      <figcaption><b>Fig A.1.6</b> | no guidance | "a high quality photo" | seeds 180, 181, 182, 183, 184</figcaption>
+    </figure>
+    <div class="prose">
+      <p>All five seeds produced portraits of people, even though the prompt says nothing about people. Seeds 182 and 184 are plausible, coherent portraits. Seed 181 has a believable face, but the torso has melted skin texture. Seeds 180 and 183 have badly distorted faces (180 is missing features, 183 is melted).</p>
+      <p>My hypothesis is that a common type of high quality image is a professional portrait shot with one clear subject, so the prompt favors portraits. Many keep only the general shape, silhouette, and color of a person. These samples are the baseline for A.2.1, which reuses the same starting noises.</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<div id="a2"></div>
+<section class="sec pa-sec" id="a21" style="--g:.28">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">A.2.1</span><h3>Classifier-Free Guidance</h3><span class="ttag">t = 0.54</span></div>
+    <div class="prose">
+      <p>Both branches are evaluated at the same x and t, with an empty-string null condition. w = 0 gives the ordinary conditional prediction; higher w overcorrects toward the prompt. I used w = 7, h = 0.02, and the same seeds as A.1.6, so the rows compare seed by seed.</p>
+      <code class="eq">v_cfg = v_c + w * (v_c - v_u)</code>
+    </div>
+    <figure>
+      <img src="parta_imgs/conditional_samples.png" alt="Repeat of the A.1.6 samples without guidance for comparison">
+      <figcaption><b>Fig A.2.1a</b> | without CFG (A.1.6, repeated for comparison) | seeds 180 to 184</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/cfg_samples.png" alt="Five samples with classifier-free guidance w = 7, seeds 180 to 184, clean front-facing portraits">
+      <figcaption><b>Fig A.2.1b</b> | CFG w = 7 | "a high quality photo" | seeds 180 to 184</figcaption>
+    </figure>
+    <div class="prose">
+      <p>Seeds 180 and 183 went from melted, featureless faces to clean, coherent portraits, and seed 181 lost the odd torso texture. The faces are much more human-like, neutral or smiling, looking at the camera, with detail like wrinkles. Contrast is higher, with more dramatic lighting and several dark studio backgrounds. Seed 182 kept the hand raised to the face, so the same starting noise keeps the rough composition.</p>
+      <p>But there is no variety: similar smiles, hair color, eye color, and position in the frame. Guidance exaggerates the prompt's push, so every sample is driven toward the model's single most typical "high quality photo." Variety is the sacrifice for image quality.</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<div id="a3"></div>
+<section class="sec pa-sec" id="a31" style="--g:.24">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">A.3.1</span><h3>Image-to-Image Editing</h3><span class="ttag">t = 0.61</span></div>
+    <div class="prose">
+      <p>To edit, I build the start point with <code>interpolate(image, noise, t_start)</code> and integrate from t_start to 1 with Euler sampling and CFG (<span class="prompt">"a high quality photo"</span>, w = 7, h = 0.02, the same noise for every t and image). The velocity is passed as a lambda of (x, t) so it is recomputed each step. Each sweep reads left to right, top to bottom, from uncanny to recognizable.</p>
+    </div>
+    <figure>
+      <img src="parta_imgs/edit_campanile.png" alt="Campanile original and edits at t = 0.02, 0.04, 0.06, 0.10, 0.14, 0.25, 0.50">
+      <figcaption><b>Fig A.3.1a</b> | Campanile | "a high quality photo" | t = 0.02 to 0.50</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/edit_my_image_1.png" alt="Silent Princess original and edits at t = 0.02 to 0.50">
+      <figcaption><b>Fig A.3.1b</b> | Silent Princess (game render) | "a high quality photo" | t = 0.02 to 0.50</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/edit_my_image_2.png" alt="Morning glory photo original and edits at t = 0.02 to 0.50">
+      <figcaption><b>Fig A.3.1c</b> | Morning glory (my photo) | "a high quality photo" | t = 0.02 to 0.50</figcaption>
+    </figure>
+    <div class="prose">
+      <h4>General pattern</h4>
+      <ul>
+        <li><b>t = 0.02 to 0.06:</b> only color palette and rough layout survive; the model invents a new scene in those colors.</li>
+        <li><b>t = 0.10 to 0.14:</b> the subject comes back, simplified.</li>
+        <li><b>t = 0.25:</b> subject plus mid-level detail.</li>
+        <li><b>t = 0.50:</b> very close to the original, including fine detail.</li>
+      </ul>
+      <p><b>Campanile:</b> even at 0.02, a tall white shape against blue sky survives; a strong, simple vertical layout is hard to lose. At 0.10 to 0.14 it becomes a plain obelisk, 0.25 has windows, and 0.50 has the clock.</p>
+      <p><b>Silent Princess:</b> low t became a picture frame, a magazine, and a phone in the original's blue, white, and green. Low t pulls toward screens, frames, and devices: since only color and layout survive, a blue focus in the center can look like a glowing screen. My hypothesis is that product photos of devices are very common online and often described as "high quality." The game render changed more across the sweep: unrecognizable from 0.02 to 0.06, with odd squarish, screen-like artifacts at 0.10 to 0.14, and close to the original only at 0.25. The model learned from real photos, so the stylized render is less familiar and it keeps trying to "correct" it.</p>
+      <p><b>Morning glory:</b> at 0.02 a portrait of a person appears, and at 0.04 to 0.06 computer monitors in the flowers' purple-blue. The sweet spot is t = 0.10, where the model starts generating flowers instead of screens. At 0.10 they are general flowers, not specifically mine; at 0.14 details appear that make them more like my flowers.</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<section class="sec pa-sec" id="a32" style="--g:.2">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">A.3.2</span><h3>Text-Guided Image Editing</h3><span class="ttag">t = 0.68</span></div>
+    <div class="prose">
+      <p>Same three inputs and seven start times as A.3.1, with a new prompt embedding in place of "a high quality photo."</p>
+    </div>
+    <figure>
+      <img src="parta_imgs/text_edit_campanile.png" alt="Campanile edited toward a ladder into the sky at t = 0.02 to 0.50">
+      <figcaption><b>Fig A.3.2a</b> | Campanile | "A photograph of a ladder into the sky" | t = 0.02 to 0.50</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/text_edit_my_image_1.png" alt="Silent Princess edited toward a white cat in a grassy field at t = 0.02 to 0.50">
+      <figcaption><b>Fig A.3.2b</b> | Silent Princess | "A photograph of a white cat sitting in a grassy field" | t = 0.02 to 0.50</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/text_edit_my_image_2.png" alt="Morning glory edited toward a purple jellyfish in a green sea at t = 0.02 to 0.50">
+      <figcaption><b>Fig A.3.2c</b> | Morning glory | "A photograph of a purple jellyfish in a green sea" | t = 0.02 to 0.50</figcaption>
+    </figure>
+    <div class="prose">
+      <ul>
+        <li><b>Ladder:</b> the prompt wins through t = 0.14, with the ladder inheriting the tower's taper and position; the Campanile takes over at 0.25.</li>
+        <li><b>Cat:</b> holds through 0.14 (at 0.14 a hybrid, the cat wears the flower's blue petals like a scarf); the flower returns at 0.25.</li>
+        <li><b>Jellyfish:</b> holds the prompt all the way to t = 0.50, with the original leaves around the jellyfish.</li>
+      </ul>
+      <p>It comes down to how well the prompt matches the original's shape and color. Purple bell-shaped blooms already look like jellyfish, so prompt and image agree at every t. The ladder and cat are entirely new subjects that fight the original's shapes, so the original wins once enough of it is kept.</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<section class="sec pa-sec" id="a33" style="--g:.16">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">A.3.3</span><h3>Editing Hand-Drawn and Web Images</h3><span class="ttag">t = 0.75</span></div>
+    <div class="prose">
+      <p>Inputs: a web image (dewy white lily stock photo), a crewmate drawing (red color fill), and a cat drawing (line art on lined paper). The drawings were cropped square with paper-colored padding. Same settings and prompt as A.3.1.</p>
+    </div>
+    <figure>
+      <img src="parta_imgs/edit_web_image.png" alt="White lily web photo and edits at t = 0.02 to 0.50">
+      <figcaption><b>Fig A.3.3a</b> | Lily (web image) | "a high quality photo" | t = 0.02 to 0.50</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/edit_drawing_2.png" alt="Red crewmate drawing and edits at t = 0.02 to 0.50">
+      <figcaption><b>Fig A.3.3b</b> | Crewmate drawing | "a high quality photo" | t = 0.02 to 0.50</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/edit_drawing_1.png" alt="Cat line drawing on lined paper and edits at t = 0.02 to 0.50">
+      <figcaption><b>Fig A.3.3c</b> | Cat drawing | "a high quality photo" | t = 0.02 to 0.50</figcaption>
+    </figure>
+    <div class="prose">
+      <p><b>Lily:</b> at 0.02 to 0.06 a computer monitor and devices, with a human hand in all three (connecting to the people bias from A.1.6 and A.2.1). At 0.10 to 0.14 a clean, simplified lily with no stamens or droplets; stamens return at 0.25, and water droplets and speckles at 0.50. It moved cleanly from desk scene to flower at 0.10, unlike the Silent Princess render.</p>
+      <p><b>Crewmate:</b> low t became red objects (a phone case or tablet), then a glossy 3D figure at 0.06 to 0.10, and back to a drawing by 0.14. It kept its identity at lower t thanks to big features: one bold red color and a rounded rectangle shape.</p>
+      <p><b>Cat:</b> low t became picture frames and devices, at 0.10 it hallucinated fake text, and at 0.14 the cat got glasses. Its thin lines can look like thin shadows, so an image made of small details only comes back at higher t. The text at 0.10 appears because thin lines on lined paper resemble where writing would be; photos of handwritten lined pages are likely very common.</p>
+      <p><b>Drawings stay drawings.</b> At higher t the starting image fixes not just layout but medium and texture (paper, ink, flat color), and "a high quality photo" isn't strong enough to override it. Overall, the more photo-like the input, the smoother the transition back to the original.</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<section class="sec pa-sec" id="a34" style="--g:.12">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">A.3.4</span><h3>Visual Anagrams</h3><span class="ttag">t = 0.83</span></div>
+    <div class="prose">
+      <p>Each step averages the velocity for prompt A with the velocity for prompt B computed on the flipped image. The B velocity must be rotated back before averaging.</p>
+      <code class="eq">v = 0.5 * ( v_cfg(x, t, c_a) + rot180( v_cfg(rot180(x), t, c_b) ) )</code>
+    </div>
+    <figure>
+      <img src="parta_imgs/anagram_views_0.png" alt="Visual anagram: upright reads as a watercolor wizard, rotated 180 degrees reads as a watercolor magical forest">
+      <figcaption><b>Fig A.3.4a</b> | upright: "a watercolor of a wizard" | rotated 180: "a watercolor of a magical forest"</figcaption>
+    </figure>
+    <figure>
+      <img src="parta_imgs/anagram_views_1.png" alt="Visual anagram: upright reads as an oil painting of a teapot, rotated 180 degrees reads as an oil painting of a bird">
+      <figcaption><b>Fig A.3.4b</b> | upright: "an oil painting of a teapot" | rotated 180: "an oil painting of a bird"</figcaption>
+    </figure>
+  </div>
+</section>
+<hr class="dbar">
+
+<section class="sec pa-sec" id="a35" style="--g:.08">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">A.3.5</span><h3>Hybrid Images</h3><span class="ttag">t = 0.90</span></div>
+    <div class="prose">
+      <p>The low frequencies of one prompt's velocity are combined with the high frequencies of the other. Prompt a sets the distant structure and prompt b the close-up detail. Viewed at full size you see the close-up prompt; at small size, the distant one.</p>
+      <code class="eq">v = lowpass(v_a) + v_b - lowpass(v_b)</code>
+    </div>
+    <div class="hyb">
+      <figure>
+        <img src="parta_imgs/hybrid_0.png" alt="Hybrid image at full size, reads as a wheat field">
+        <figcaption><b>Fig A.3.5a</b> | full size | close-up: wheat field | distant: lion face</figcaption>
+      </figure>
+      <figure class="small">
+        <img src="parta_imgs/hybrid_0.png" alt="Same hybrid at reduced size, reads as a lion face">
+        <figcaption>reduced size | lion face</figcaption>
+      </figure>
+    </div>
+    <div class="hyb">
+      <figure>
+        <img src="parta_imgs/hybrid_1.png" alt="Hybrid image at full size, reads as an erupting volcano">
+        <figcaption><b>Fig A.3.5b</b> | full size | close-up: erupting volcano | distant: dragon head</figcaption>
+      </figure>
+      <figure class="small">
+        <img src="parta_imgs/hybrid_1.png" alt="Same hybrid at reduced size, reads as a dragon head">
+        <figcaption>reduced size | dragon head</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- ============ PART B ============ -->
+<section class="banner pb" id="partB">
+  <div class="wrap">
+    <div>
+      <h2>Part B</h2>
+      <p>Flow Matching from Scratch</p>
+    </div>
+    <div class="range">t = 0.91 to 0.98</div>
+  </div>
+</section>
+
+<div id="b1"></div>
+<section class="sec pb-sec" id="b11" style="--g:.06">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">B.1.1</span><h3>UNet</h3><span class="ttag">t = 0.91</span></div>
+    <div class="prose">
+      <p>I built the simple ops (Conv, DownConv, UpConv, Flatten, Unflatten) and the composed ops (ConvBlock, DownBlock, UpBlock), all shape-tested, then assembled the UnconditionalUNet. The forward pass saves x1, x2, x3 for the three skip concatenations (<code>torch.cat</code> on dim = 1). An input of shape (4, 1, 28, 28) returns (4, 1, 28, 28).</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<section class="sec pb-sec" id="b12" style="--g:.05">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">B.1.2</span><h3>Noising Process</h3><span class="ttag">t = 0.92</span></div>
+    <div class="prose">
+      <code class="eq">z = x + sigma * eps,   sigma in {0.0, 0.2, 0.4, 0.5, 0.6, 0.8, 1.0}</code>
+      <p>Unlike Part A, the digit is never scaled down; noise is piled on top.</p>
+    </div>
+    <figure class="px">
+      <img src="partb_imgs/Noisy_Imgs.png" alt="MNIST digits with Gaussian noise at sigma from 0.0 to 1.0">
+      <figcaption><b>Fig B.1.2</b> | MNIST digits | sigma = 0.0, 0.2, 0.4, 0.5, 0.6, 0.8, 1.0</figcaption>
+    </figure>
+    <div class="prose">
+      <p>Digits are easy to read through sigma = 0.4, rough at 0.5 to 0.6, and mostly unreadable at 0.8 to 1.0. The 0 and 9 survive longest.</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<section class="sec pb-sec" id="b121" style="--g:.04">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">B.1.2.1</span><h3>Training the Denoiser</h3><span class="ttag">t = 0.93</span></div>
+    <div class="prose">
+      <p>Trained at sigma = 0.5 with D = 128, Adam lr = 1e-4, batch size 256, for 5 epochs (about 235 steps per epoch, 1,175 total). The clean images stay the target.</p>
+    </div>
+    <figure class="narrow">
+      <img src="partb_imgs/denoiser_sigma0.5_loss.png" alt="Training loss curve for the sigma 0.5 denoiser">
+      <figcaption><b>Fig B.1.2.1a</b> | training loss | sigma = 0.5 | 5 epochs</figcaption>
+    </figure>
+    <figure class="px">
+      <img src="partb_imgs/denoise_epochs.png" alt="Clean digits, noisy digits, and denoised outputs after epoch 1 and epoch 5">
+      <figcaption><b>Fig B.1.2.1b</b> | clean, noisy (sigma = 0.5), denoised after epoch 1, denoised after epoch 5</figcaption>
+    </figure>
+    <div class="prose">
+      <p>The loss starts near 0.13 and drops sharply in the first 50 steps (learning the black background), then declines slowly to about 0.008 (refining stroke shapes). Both epoch 1 and epoch 5 outputs are clean; epoch 5 is slightly sharper.</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<section class="sec pb-sec" id="b122" style="--g:.03">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">B.1.2.2</span><h3>Out-of-Distribution Testing</h3><span class="ttag">t = 0.94</span></div>
+    <div class="prose">
+      <p>The same 10 test digits at sigma from 0.0 to 1.0, with the model trained only at sigma = 0.5.</p>
+    </div>
+    <figure class="px">
+      <img src="partb_imgs/ood.png" alt="Noisy and denoised rows for sigma from 0.0 to 1.0 using the sigma 0.5 denoiser">
+      <figcaption><b>Fig B.1.2.2</b> | noisy and denoised rows | sigma = 0.0 to 1.0 | trained at sigma = 0.5</figcaption>
+    </figure>
+    <div class="prose">
+      <ul>
+        <li><b>sigma = 0.0 to 0.5:</b> nearly perfect; at 0.0 the digits are left basically untouched.</li>
+        <li><b>sigma = 0.6:</b> first small artifacts.</li>
+        <li><b>sigma = 0.8:</b> strokes break up, with stray speckles.</li>
+        <li><b>sigma = 1.0:</b> many digits fall apart (the 1 becomes a squiggle, the 2 becomes "21"); the 0, 4, and 9 survive.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<section class="sec pb-sec" id="b123" style="--g:.02">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">B.1.2.3</span><h3>Denoising Pure Noise</h3><span class="ttag">t = 0.95</span></div>
+    <div class="prose">
+      <p>Same setup, but the input is pure noise z = eps while the target is still the clean digit.</p>
+    </div>
+    <figure class="narrow">
+      <img src="partb_imgs/pure_noise_loss.png" alt="Training loss curve for denoising pure noise, flattening near 0.068">
+      <figcaption><b>Fig B.1.2.3a</b> | training loss | input z = eps</figcaption>
+    </figure>
+    <figure class="px">
+      <img src="partb_imgs/pure_noise_epochs.png" alt="Pure noise inputs and outputs after epoch 1 and epoch 5, all the same blurry average digit">
+      <figcaption><b>Fig B.1.2.3b</b> | pure noise input, output after epoch 1, output after epoch 5</figcaption>
+    </figure>
+    <div class="prose">
+      <p>Every output is the same blurry image regardless of input, like a 0, 3, 8, and 9 overlapped; epoch 5 is slightly smoother. The loss drops fast within about 100 steps and then sits flat at about 0.068 (versus 0.008 for the B.1.2.1 denoiser).</p>
+      <p>The model averages all the digits together and outputs the mean of the data, roughly the pixel-by-pixel average of all ten digits. Strokes many digits share (the center loop area) are brightest; strokes unique to one digit (the 7's top bar, the 1's thin line) fade. The noise carries no information about the target, so the model can only output one fixed image, and under MSE the image with the lowest average squared error against all training digits is their mean. The flat 0.068 floor is how different real digits are from their average; no amount of training removes it. Same idea as Part A: MSE rewards blurry averages.</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<div id="b2"></div>
+<section class="sec pb-sec" id="b23" style="--g:.01">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">B.2.3</span><h3>Time-Conditioned Flow Matching</h3><span class="ttag">t = 0.96</span></div>
+    <div class="prose">
+      <p>An FCBlock (Linear, GELU, Linear) embeds t: fc1_t (1 to 2D) modulates the unflatten output and fc2_t (1 to D) modulates the up1 output. Training samples t uniformly per image and regresses the velocity; sampling runs 50 Euler steps from noise. D = 64, batch 64, Adam lr 1e-2, ExponentialLR gamma = 0.1^(1/10), 10 epochs.</p>
+      <code class="eq">x_t = (1 - t) * x_0 + t * x_1,   target = x_1 - x_0,   loss = MSE</code>
+    </div>
+    <figure class="narrow">
+      <img src="partb_imgs/time_fm_loss.png" alt="Training loss curve for the time-conditioned flow matching UNet">
+      <figcaption><b>Fig B.2.3a</b> | training loss | time-conditioned UNet | 10 epochs</figcaption>
+    </figure>
+    <figure class="px">
+      <img src="partb_imgs/time_fm_samples_epoch1.png" alt="Time-conditioned samples after epoch 1, stroke-like squiggles">
+      <figcaption><b>Fig B.2.3b</b> | samples | epoch 1</figcaption>
+    </figure>
+    <figure class="px">
+      <img src="partb_imgs/time_fm_samples_epoch5.png" alt="Time-conditioned samples after epoch 5, mostly recognizable digits">
+      <figcaption><b>Fig B.2.3c</b> | samples | epoch 5</figcaption>
+    </figure>
+    <figure class="px">
+      <img src="partb_imgs/time_fm_samples_epoch10.png" alt="Time-conditioned samples after epoch 10, cleaner digits">
+      <figcaption><b>Fig B.2.3d</b> | samples | epoch 10</figcaption>
+    </figure>
+    <div class="prose">
+      <ul>
+        <li><b>Epoch 1:</b> stroke-like squiggles; it learned "white strokes on black" but not digit shapes.</li>
+        <li><b>Epoch 5:</b> most samples are recognizable digits, some malformed.</li>
+        <li><b>Epoch 10:</b> cleaner, more confident strokes; a few hybrids remain.</li>
+      </ul>
+      <p>The samples are a mix of digits since there is no class information. With the same seed at every checkpoint, many positions keep the same digit from epoch 5 to 10: training sharpens them rather than changing them.</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar">
+
+<section class="sec pb-sec" id="b26">
+  <div class="wrap">
+    <div class="sec-head"><span class="num">B.2.6</span><h3>Class-Conditioned Flow Matching</h3><span class="ttag">t = 0.98</span></div>
+    <div class="prose">
+      <p>The class is a one-hot vector with 10% class dropout. fc1_c (10 to 2D) and fc2_c (10 to D) scale the features while time shifts them: unflatten = c1 * unflatten + t1, up1 = c2 * up1 + t2. Sampling uses CFG with gamma = 5 and 300 Euler steps, 4 of each digit.</p>
+      <code class="eq">v = v_u + gamma * (v_c - v_u),   gamma = 5</code>
+    </div>
+    <div class="compare-head"><div>With scheduler (lr 1e-2, exponential decay)</div><div>No scheduler (constant lr 2e-3)</div></div>
+    <div class="row c2">
+      <figure><img src="partb_imgs/class_fm_loss.png" alt="Training loss with learning rate scheduler"><figcaption><b>Fig B.2.6a</b> | scheduler | training loss</figcaption></figure>
+      <figure><img src="partb_imgs/ns_fm_loss.png" alt="Training loss without learning rate scheduler"><figcaption><b>Fig B.2.6b</b> | no scheduler | training loss</figcaption></figure>
+    </div>
+    <div class="row c2 px">
+      <figure><img src="partb_imgs/class_fm_scheduler_epoch1.png" alt="Class-conditioned samples with scheduler after epoch 1"><figcaption><b>Fig B.2.6c</b> | scheduler | epoch 1</figcaption></figure>
+      <figure><img src="partb_imgs/class_fm_no_scheduler_epoch1.png" alt="Class-conditioned samples without scheduler after epoch 1"><figcaption><b>Fig B.2.6d</b> | no scheduler | epoch 1</figcaption></figure>
+    </div>
+    <div class="row c2 px">
+      <figure><img src="partb_imgs/class_fm_scheduler_epoch5.png" alt="Class-conditioned samples with scheduler after epoch 5"><figcaption><b>Fig B.2.6e</b> | scheduler | epoch 5</figcaption></figure>
+      <figure><img src="partb_imgs/class_fm_no_scheduler_epoch5.png" alt="Class-conditioned samples without scheduler after epoch 5"><figcaption><b>Fig B.2.6f</b> | no scheduler | epoch 5</figcaption></figure>
+    </div>
+    <div class="row c2 px">
+      <figure><img src="partb_imgs/class_fm_scheduler_epoch10.png" alt="Class-conditioned samples with scheduler after epoch 10"><figcaption><b>Fig B.2.6g</b> | scheduler | epoch 10</figcaption></figure>
+      <figure><img src="partb_imgs/class_fm_no_scheduler_epoch10.png" alt="Class-conditioned samples without scheduler after epoch 10"><figcaption><b>Fig B.2.6h</b> | no scheduler | epoch 10</figcaption></figure>
+    </div>
+    <div class="prose">
+      <h4>Learning rate choice: constant 2e-3</h4>
+      <p>The scheduler decays the rate from 1e-2 to 1e-3 over 10 epochs: big steps early to learn rough shapes, small steps late to refine details. My constant 2e-3 sits between the start and end. It is small enough to refine details late without a decay schedule while still learning reasonably fast early. A constant 1e-2 would risk a noisy loss that doesn't settle, since big steps overshoot late in training. 2e-3 leans toward stability over early speed.</p>
+      <h4>Comparison</h4>
+      <ul>
+        <li><b>Loss:</b> the scheduler run spikes to about 11.5 in the first steps (1e-2 is unstable early); the no-scheduler run starts near 1.2. Both settle around 0.08 to 0.1. The loss never reaches zero because at high noise many digits fit the same noisy image, a milder version of the pure-noise averaging.</li>
+        <li><b>Epoch 1:</b> scheduler samples are blobby, thick, and speckled with shaky 7s and 9s; no-scheduler samples are already cleaner and thinner.</li>
+        <li><b>Epoch 5:</b> both clean, every column the correct digit.</li>
+        <li><b>Epoch 10:</b> both clean; the scheduler run has small stray dots (the 4 and 9 in row 1), the no-scheduler run has one odd 4.</li>
+      </ul>
+      <p>The high starting rate makes early training unstable, and the scheduler then shrinks it so the model settles. The constant 2e-3 avoids the early instability and reaches the same quality in 10 epochs. Class conditioning works: every column is the requested digit, in 4 different styles.</p>
+    </div>
+  </div>
+</section>
+<hr class="dbar clean">
+
+<section class="close" id="end">
+  <div class="wrap">
+    <div class="sec-head" style="border-top:0;padding-top:0"><span class="num">End</span><span></span><span class="ttag" style="background:var(--color-text);color:var(--color-bg)">t = 1.00</span></div>
+    <h2>Signal.</h2>
+    <div class="prose">
+      <p>Classical blur can only trade noise for blur, a one-step model recovers layout and color but averages away detail, and iterative sampling recovers sharp, plausible detail through many small steps. Across both parts, MSE kept rewarding blurry averages, from the one-step estimate in Part A to the centroid digit in Part B, so looking at the results matters as much as the metric. Guidance and conditioning buy quality and control at the cost of variety.</p>
+    </div>
+  </div>
+</section>
+
+<footer><div class="wrap">CS180 Project 3 | From Noise to Signal</div></footer>
+</body>
+</html>
